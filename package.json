@@ -2,7 +2,7 @@
   "name": "github-profile-switcher",
   "displayName": "GitHub Profile Switcher",
   "description": "Easily switch between multiple GitHub profiles (user.name, user.email, SSH key, token) per workspace.",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "publisher": "latief",
   "engines": {
     "vscode": "^1.74.0"
@@ -24,7 +24,7 @@
   "main": "./out/extension.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/latiefahmad/switcher"
+    "url": "https://github.com/latiefahmad/github-switcher"
   },
   "contributes": {
     "commands": [
