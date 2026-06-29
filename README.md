@@ -115,3 +115,15 @@ Jika repositorimu menggunakan HTTPS, koneksi multi-akun sering mengalami bentrok
 * `githubSwitcher.applyGlobally` (default: `false`): Jika `true`, setelan `git config` akan diterapkan secara global (`--global`), bukan lokal per-repositori.
 * `githubSwitcher.showStatusBar` (default: `true`): Menampilkan status bar profil aktif di kiri bawah.
 * `githubSwitcher.autoSwitchOnWorkspaceOpen` (default: `true`): Otomatis mengganti profil ketika membuka folder proyek yang telah di-bind.
+
+---
+
+## ☕ Support & Donation / Dukungan & Donasi
+
+If this extension has helped you work faster and resolve authentication conflicts, consider buying me a coffee!
+Jika ekstensi ini membantu mempermudah pekerjaanmu, dukung pengembangannya lewat:
+
+* **Saweria**: [saweria.co/latiefahmad](https://saweria.co/latiefahmad)
+* **Trakteer**: [trakteer.id/latiefahmad/tip](https://trakteer.id/latiefahmad/tip)
+
+Thank you for your support! / Terima kasih banyak atas dukungannya!
