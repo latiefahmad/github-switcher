@@ -19,10 +19,10 @@
 
 ## 🚀 Cara Install
 
-1. Download file VSIX versi terbaru: [github-profile-switcher-1.8.0.vsix]
+1. Download file VSIX versi terbaru: [github-profile-switcher-1.8.1.vsix](https://github.com/latiefahmad/switcher/releases/download/v1.8.1/github-profile-switcher-1.8.1.vsix) (atau kunjungi halaman [GitHub Releases](https://github.com/latiefahmad/switcher/releases))
 2. Buka VSCode / Antigravity → Extensions (`Ctrl+Shift+X`)
 3. Klik tombol `···` (Menu) di kanan atas panel Extensions → pilih **Install from VSIX...**
-4. Pilih file `github-profile-switcher-1.8.0.vsix` yang telah didownload.
+4. Pilih file `github-profile-switcher-1.8.1.vsix` yang telah didownload.
 5. Jalankan perintah `Developer: Reload Window` jika diperlukan.
 
 ---
