@@ -23,7 +23,11 @@ export class ProfileManager {
   }
 
   getActiveProfileId(workspaceUri?: string): string | undefined {
-    // Check workspace-specific binding first
+    // 1. Check workspace-specific active profile from workspaceState first
+    const wsActive = this.context.workspaceState.get<string>(ACTIVE_PROFILE_KEY);
+    if (wsActive) return wsActive;
+
+    // 2. Check workspace-specific binding next
     if (workspaceUri) {
       const profiles = this.getProfiles();
       const bound = profiles.find((p) =>
@@ -31,7 +35,7 @@ export class ProfileManager {
       );
       if (bound) return bound.id;
     }
-    // Fall back to global active
+    // 3. Fall back to global active
     return this.context.globalState.get<string>(ACTIVE_PROFILE_KEY);
   }
 
@@ -114,6 +118,7 @@ export class ProfileManager {
     const activeId = this.context.globalState.get<string>(ACTIVE_PROFILE_KEY);
     if (activeId === id) {
       await this.context.globalState.update(ACTIVE_PROFILE_KEY, undefined);
+      await this.context.workspaceState.update(ACTIVE_PROFILE_KEY, undefined);
     }
   }
 
@@ -130,6 +135,7 @@ export class ProfileManager {
 
     await this.context.globalState.update(PROFILES_KEY, profiles);
     await this.context.globalState.update(ACTIVE_PROFILE_KEY, id);
+    await this.context.workspaceState.update(ACTIVE_PROFILE_KEY, id);
   }
 
   // ─── Workspace Binding ─────────────────────────────────────────────────────
@@ -160,6 +166,7 @@ export class ProfileManager {
       p.boundWorkspaces = p.boundWorkspaces.filter((w) => w !== workspaceUri);
     }
     await this.context.globalState.update(PROFILES_KEY, profiles);
+    await this.context.workspaceState.update(ACTIVE_PROFILE_KEY, undefined);
   }
 
   // ─── Export / Import ───────────────────────────────────────────────────────

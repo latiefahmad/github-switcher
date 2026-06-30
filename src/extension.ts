@@ -5,6 +5,7 @@ import { SshConfigManager } from './sshConfigManager';
 import { StatusBarManager } from './statusBar';
 import { CommandRegistry } from './commands';
 import { PanelProvider } from './webview/panelProvider';
+import { getActiveWorkspaceFolder } from './utils';
 
 // Output channel for debugging
 let outputChannel: vscode.OutputChannel;
@@ -32,8 +33,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await commands.applyProfile(profile);
       },
       () => {
+        const workspaceFolder = getActiveWorkspaceFolder();
         const active = profileManager.getActiveProfile(
-          vscode.workspace.workspaceFolders?.[0]?.uri.toString()
+          workspaceFolder?.uri.toString()
         );
         statusBar.update(active);
       }
@@ -53,7 +55,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine('[GitHub Profile Switcher] Commands registered');
 
     // ── Status bar initial render ────────────────────────────────────────────
-    const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+    const workspaceFolder = getActiveWorkspaceFolder();
+    const workspaceUri = workspaceFolder?.uri.toString();
     const activeProfile = profileManager.getActiveProfile(workspaceUri);
     statusBar.update(activeProfile);
     context.subscriptions.push({ dispose: () => statusBar.dispose() });
@@ -70,11 +73,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (autoSwitch && workspaceUri) {
       const bound = profileManager.getActiveProfile(workspaceUri);
       const globalActive = profileManager.getActiveProfile();
+      const allProfiles = profileManager.getProfiles();
 
       if (bound && bound.id !== globalActive?.id) {
         try {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-          await gitConfig.applyProfile(bound, workspaceFolder);
+          await gitConfig.applyProfile(bound, workspaceFolder, allProfiles);
           await sshConfig.applyProfile(bound);
           await profileManager.setActiveProfile(bound.id);
           statusBar.update(bound);
@@ -91,9 +94,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ── Watch for workspace folder changes ──────────────────────────────────
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
-        const uri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
-        const profile = profileManager.getActiveProfile(uri);
+        const folder = getActiveWorkspaceFolder();
+        const profile = profileManager.getActiveProfile(folder?.uri.toString());
         statusBar.update(profile);
+      })
+    );
+
+    // ── Watch for active text editor changes (vital for multi-root) ──────────
+    context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        if (editor) {
+          const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+          const profile = profileManager.getActiveProfile(folder?.uri.toString());
+          statusBar.update(profile);
+          panelProvider.notifyProfilesChanged(); // Keep webview in sync with active editor repo
+        }
       })
     );
 
@@ -101,8 +116,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (e.affectsConfiguration('githubSwitcher.showStatusBar')) {
+          const folder = getActiveWorkspaceFolder();
           const profile = profileManager.getActiveProfile(
-            vscode.workspace.workspaceFolders?.[0]?.uri.toString()
+            folder?.uri.toString()
           );
           statusBar.update(profile);
         }

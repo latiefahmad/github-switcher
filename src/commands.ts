@@ -6,6 +6,7 @@ import { StatusBarManager } from './statusBar';
 import { PanelProvider } from './webview/panelProvider';
 import { testGitHubConnection } from './githubApi';
 import { GitHubProfile } from './types';
+import { getActiveWorkspaceFolder } from './utils';
 
 // Separator helper for QuickPick
 const SEP = { label: '', kind: vscode.QuickPickItemKind.Separator };
@@ -48,7 +49,8 @@ export class CommandRegistry {
     const profiles = this.profileManager.getProfiles();
 
     // Detect remote type for current workspace
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceFolder = getActiveWorkspaceFolder();
+    const cwd = workspaceFolder?.uri.fsPath;
     const remoteType = cwd ? await this.gitConfig.getRemoteType(cwd) : 'none';
     const remoteUrl  = cwd ? await this.gitConfig.getRemoteUrl(cwd) : undefined;
 
@@ -223,52 +225,23 @@ export class CommandRegistry {
   // ─── Convert Remote to SSH ─────────────────────────────────────────────────
 
   async convertRemoteToSsh(): Promise<void> {
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const workspaceFolder = getActiveWorkspaceFolder();
+    const cwd = workspaceFolder?.uri.fsPath;
     if (!cwd) {
       vscode.window.showWarningMessage('No workspace folder open.');
       return;
     }
 
-    const remoteUrl = await this.gitConfig.getRemoteUrl(cwd);
-    if (!remoteUrl) {
-      vscode.window.showWarningMessage('No git remote found in this workspace.');
+    const workspaceUri = workspaceFolder.uri.toString();
+    const activeProfile = this.profileManager.getActiveProfile(workspaceUri);
+    if (!activeProfile) {
+      vscode.window.showWarningMessage('No active GitHub profile to convert remote for.');
       return;
     }
 
-    const httpsMatch = remoteUrl.match(
-      /^https:\/\/github\.com\/([^\/]+)\/(.+?)(?:\.git)?$/
-    );
-    if (!httpsMatch) {
-      vscode.window.showInformationMessage(
-        `Remote is already SSH or not a GitHub HTTPS URL: ${remoteUrl}`
-      );
-      return;
-    }
-
-    const [, org, repo] = httpsMatch;
-    const sshUrl = `git@github.com:${org}/${repo}.git`;
-
-    const confirm = await vscode.window.showInformationMessage(
-      `Convert remote from HTTPS to SSH?\n\nFrom: ${remoteUrl}\nTo:   ${sshUrl}\n\nThis fixes push/pull auth when using multiple GitHub accounts.`,
-      { modal: true },
-      'Convert'
-    );
-
-    if (confirm !== 'Convert') return;
-
-    try {
-      const { exec } = require('child_process') as typeof import('child_process');
-      const { promisify } = require('util') as typeof import('util');
-      const execAsync = promisify(exec);
-      await execAsync(`git -C "${cwd}" remote set-url origin "${sshUrl}"`);
-      vscode.window.showInformationMessage(
-        `✅ Remote converted to SSH: ${sshUrl}\n\nPush/pull will now use your SSH key for auth.`
-      );
-    } catch (err) {
-      vscode.window.showErrorMessage(
-        `Failed to convert remote: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
+    const allProfiles = this.profileManager.getProfiles();
+    await this.gitConfig.checkAndSuggestSshRemote(cwd, activeProfile, allProfiles);
+    this.panelProvider.notifyProfilesChanged();
   }
 
   async switchProfile(): Promise<void> {
@@ -319,9 +292,10 @@ export class CommandRegistry {
     this.statusBar.setLoading();
 
     try {
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      const workspaceFolder = getActiveWorkspaceFolder();
+      const allProfiles = this.profileManager.getProfiles();
 
-      await this.gitConfig.applyProfile(profile, workspaceFolder);
+      await this.gitConfig.applyProfile(profile, workspaceFolder, allProfiles);
       await this.sshConfig.applyProfile(profile);
       await this.profileManager.setActiveProfile(profile.id);
 
@@ -497,6 +471,6 @@ export class CommandRegistry {
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   private getCurrentWorkspaceUri(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+    return getActiveWorkspaceFolder()?.uri.toString();
   }
 }

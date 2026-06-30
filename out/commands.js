@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CommandRegistry = void 0;
 const vscode = __importStar(require("vscode"));
 const githubApi_1 = require("./githubApi");
+const utils_1 = require("./utils");
 // Separator helper for QuickPick
 const SEP = { label: '', kind: vscode.QuickPickItemKind.Separator };
 class CommandRegistry {
@@ -69,7 +70,8 @@ class CommandRegistry {
         const active = this.profileManager.getActiveProfile(workspaceUri);
         const profiles = this.profileManager.getProfiles();
         // Detect remote type for current workspace
-        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceFolder = (0, utils_1.getActiveWorkspaceFolder)();
+        const cwd = workspaceFolder?.uri.fsPath;
         const remoteType = cwd ? await this.gitConfig.getRemoteType(cwd) : 'none';
         const remoteUrl = cwd ? await this.gitConfig.getRemoteUrl(cwd) : undefined;
         // ── Build QuickPick items ─────────────────────────────────────────────────
@@ -238,36 +240,21 @@ class CommandRegistry {
     }
     // ─── Convert Remote to SSH ─────────────────────────────────────────────────
     async convertRemoteToSsh() {
-        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceFolder = (0, utils_1.getActiveWorkspaceFolder)();
+        const cwd = workspaceFolder?.uri.fsPath;
         if (!cwd) {
             vscode.window.showWarningMessage('No workspace folder open.');
             return;
         }
-        const remoteUrl = await this.gitConfig.getRemoteUrl(cwd);
-        if (!remoteUrl) {
-            vscode.window.showWarningMessage('No git remote found in this workspace.');
+        const workspaceUri = workspaceFolder.uri.toString();
+        const activeProfile = this.profileManager.getActiveProfile(workspaceUri);
+        if (!activeProfile) {
+            vscode.window.showWarningMessage('No active GitHub profile to convert remote for.');
             return;
         }
-        const httpsMatch = remoteUrl.match(/^https:\/\/github\.com\/([^\/]+)\/(.+?)(?:\.git)?$/);
-        if (!httpsMatch) {
-            vscode.window.showInformationMessage(`Remote is already SSH or not a GitHub HTTPS URL: ${remoteUrl}`);
-            return;
-        }
-        const [, org, repo] = httpsMatch;
-        const sshUrl = `git@github.com:${org}/${repo}.git`;
-        const confirm = await vscode.window.showInformationMessage(`Convert remote from HTTPS to SSH?\n\nFrom: ${remoteUrl}\nTo:   ${sshUrl}\n\nThis fixes push/pull auth when using multiple GitHub accounts.`, { modal: true }, 'Convert');
-        if (confirm !== 'Convert')
-            return;
-        try {
-            const { exec } = require('child_process');
-            const { promisify } = require('util');
-            const execAsync = promisify(exec);
-            await execAsync(`git -C "${cwd}" remote set-url origin "${sshUrl}"`);
-            vscode.window.showInformationMessage(`✅ Remote converted to SSH: ${sshUrl}\n\nPush/pull will now use your SSH key for auth.`);
-        }
-        catch (err) {
-            vscode.window.showErrorMessage(`Failed to convert remote: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        const allProfiles = this.profileManager.getProfiles();
+        await this.gitConfig.checkAndSuggestSshRemote(cwd, activeProfile, allProfiles);
+        this.panelProvider.notifyProfilesChanged();
     }
     async switchProfile() {
         const profiles = this.profileManager.getProfiles();
@@ -308,8 +295,9 @@ class CommandRegistry {
     async applyProfile(profile) {
         this.statusBar.setLoading();
         try {
-            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            await this.gitConfig.applyProfile(profile, workspaceFolder);
+            const workspaceFolder = (0, utils_1.getActiveWorkspaceFolder)();
+            const allProfiles = this.profileManager.getProfiles();
+            await this.gitConfig.applyProfile(profile, workspaceFolder, allProfiles);
             await this.sshConfig.applyProfile(profile);
             await this.profileManager.setActiveProfile(profile.id);
             this.statusBar.update(profile);
@@ -450,7 +438,7 @@ class CommandRegistry {
     }
     // ─── Helpers ───────────────────────────────────────────────────────────────
     getCurrentWorkspaceUri() {
-        return vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+        return (0, utils_1.getActiveWorkspaceFolder)()?.uri.toString();
     }
 }
 exports.CommandRegistry = CommandRegistry;

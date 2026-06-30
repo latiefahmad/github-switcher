@@ -37,6 +37,7 @@ exports.GitConfigManager = void 0;
 const vscode = __importStar(require("vscode"));
 const child_process_1 = require("child_process");
 const util_1 = require("util");
+const path = __importStar(require("path"));
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 class GitConfigManager {
     /**
@@ -44,7 +45,7 @@ class GitConfigManager {
      * The credential.username config tells Git Credential Manager (GCM) which
      * stored account to use for HTTPS push/pull — fixing the "wrong account" problem.
      */
-    async applyProfile(profile, workspaceFolder) {
+    async applyProfile(profile, workspaceFolder, allProfiles = []) {
         const applyGlobally = vscode.workspace
             .getConfiguration('githubSwitcher')
             .get('applyGlobally', false);
@@ -65,8 +66,6 @@ class GitConfigManager {
                 await this.setLocalConfig('user.email', profile.gitEmail, cwd);
                 // ── HTTPS credential switching ───────────────────────────────────────
                 // Tell GCM which GitHub account to use for this repo.
-                // This is the key fix: without this, git uses whatever account is
-                // cached in Windows Credential Manager (usually the last-used one).
                 if (profile.githubUsername) {
                     await this.setLocalConfig('credential.https://github.com.username', profile.githubUsername, cwd).catch(() => { });
                 }
@@ -74,7 +73,17 @@ class GitConfigManager {
                 // If the profile has an SSH key, check if the remote uses HTTPS.
                 // If so, offer to convert it to SSH for seamless auth.
                 if (profile.sshKeyPath) {
-                    await this.checkAndSuggestSshRemote(cwd, profile.githubUsername);
+                    await this.checkAndSuggestSshRemote(cwd, profile, allProfiles);
+                }
+                else {
+                    const remoteType = await this.getRemoteType(cwd);
+                    if (remoteType === 'https') {
+                        vscode.window.showWarningMessage(`⚠️ [GitHub Switcher] This profile doesn't have an SSH key configured, but the repository uses HTTPS. We recommend setting up an SSH key to avoid permission conflicts.`, 'Setup SSH Key').then(selection => {
+                            if (selection === 'Setup SSH Key') {
+                                vscode.commands.executeCommand('github-profile-switcher.manageProfiles');
+                            }
+                        });
+                    }
                 }
             }
             else {
@@ -90,21 +99,48 @@ class GitConfigManager {
     }
     /**
      * Detect if the remote origin uses HTTPS for github.com.
-     * If so, suggest converting to SSH (more reliable for multi-account).
+     * If so, suggest converting to SSH. Also checks if the remote owner matches
+     * one of the other profiles and suggests correction.
      */
-    async checkAndSuggestSshRemote(cwd, githubUsername) {
+    async checkAndSuggestSshRemote(cwd, activeProfile, allProfiles = []) {
         try {
             const { stdout } = await execAsync(`git -C "${cwd}" remote get-url origin`);
             const remoteUrl = stdout.trim();
-            // If it's HTTPS github.com, offer to convert to SSH
-            const httpsMatch = remoteUrl.match(/^https:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
-            if (httpsMatch) {
-                const [, org, repo] = httpsMatch;
-                const sshUrl = `git@github.com:${org}/${repo}.git`;
-                const action = await vscode.window.showInformationMessage(`This repo uses HTTPS remote. Convert to SSH (${sshUrl}) for seamless multi-account auth?`, 'Convert to SSH', 'Keep HTTPS');
-                if (action === 'Convert to SSH') {
+            // If it's HTTPS/SSH github.com, we can check/suggest
+            const githubMatch = remoteUrl.match(/^(?:https:\/\/github\.com\/|git@github\.com:)([^\/]+)\/(.+?)(?:\.git)?$/);
+            if (githubMatch) {
+                const [, org, repo] = githubMatch;
+                const activeUsername = activeProfile.githubUsername;
+                // Find other stored profile usernames to detect mismatches
+                const otherUsernames = allProfiles
+                    .map(p => p.githubUsername)
+                    .filter(uname => uname && uname.toLowerCase() !== activeUsername.toLowerCase());
+                let targetOrg = org;
+                let isOwnerMismatch = false;
+                // If the repository owner belongs to one of our other profiles, warning is triggered
+                if (org.toLowerCase() !== activeUsername.toLowerCase() &&
+                    otherUsernames.some(uname => uname.toLowerCase() === org.toLowerCase())) {
+                    isOwnerMismatch = true;
+                    targetOrg = activeUsername;
+                }
+                const sshUrl = `git@github.com:${targetOrg}/${repo}.git`;
+                const originalSshUrl = `git@github.com:${org}/${repo}.git`;
+                let action;
+                const repoName = path.basename(cwd);
+                if (isOwnerMismatch) {
+                    action = await vscode.window.showWarningMessage(`⚠️ [GitHub Switcher] Owner Mismatch!\nYou switched to profile "${activeProfile.label}" (@${activeUsername}), but this repository remote owner is "${org}" (which belongs to your other profile).\n\nIf this repository should belong to your active account "@${activeUsername}", we can convert it to SSH under your username.\n\nChoose conversion target:`, { modal: true }, `Convert to SSH under @${activeUsername}`, `Keep original owner @${org}`);
+                }
+                else if (remoteUrl.startsWith('https://')) {
+                    // Normal HTTPS -> SSH conversion
+                    action = await vscode.window.showWarningMessage(`[GitHub Switcher] Repository "${repoName}" is using an HTTPS remote URL. This will cause authentication/permission conflicts when pushing/pulling with multiple accounts.\n\nWould you like to convert the remote URL to SSH (${sshUrl}) for seamless authentication?`, { modal: true }, 'Convert to SSH');
+                }
+                if (action === 'Convert to SSH' || action === `Convert to SSH under @${activeUsername}`) {
                     await execAsync(`git -C "${cwd}" remote set-url origin "${sshUrl}"`);
-                    vscode.window.showInformationMessage(`✅ Remote changed to SSH: ${sshUrl}`);
+                    vscode.window.showInformationMessage(`✅ Remote successfully converted to SSH: ${sshUrl}`);
+                }
+                else if (action === `Keep original owner @${org}`) {
+                    await execAsync(`git -C "${cwd}" remote set-url origin "${originalSshUrl}"`);
+                    vscode.window.showInformationMessage(`✅ Remote successfully converted to SSH (Original Owner): ${originalSshUrl}`);
                 }
             }
         }

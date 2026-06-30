@@ -4,6 +4,7 @@ import * as os from 'os';
 import { ProfileManager } from '../profileManager';
 import { GitHubProfile, WebviewMessage } from '../types';
 import { testGitHubConnection } from '../githubApi';
+import { getActiveWorkspaceFolder } from '../utils';
 import { GitConfigManager } from '../gitConfigManager';
 
 export class PanelProvider {
@@ -63,7 +64,7 @@ export class PanelProvider {
     if (!this.panel) return;
 
     const profiles = this.profileManager.getProfiles();
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const workspaceFolder = getActiveWorkspaceFolder();
     const workspaceUri = workspaceFolder?.uri.toString();
     const activeId = this.profileManager.getActiveProfileId(workspaceUri);
 
@@ -86,6 +87,7 @@ export class PanelProvider {
         const remoteType = await gitConfig.getRemoteType(cwd);
         workspaceInfo = {
           name: workspaceFolder.name,
+          uri: workspaceFolder.uri.toString(),
           remoteUrl,
           remoteType
         };
@@ -117,6 +119,8 @@ export class PanelProvider {
           githubUsername: string;
           sshKeyPath?: string;
           token?: string;
+          bindWorkspace?: boolean;
+          convertRemoteSsh?: boolean;
         };
 
         try {
@@ -127,17 +131,32 @@ export class PanelProvider {
             savedProfile = await this.profileManager.addProfile(data);
           }
 
-          // If the profile we just updated is the active one, re-apply it to the system
-          const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+          const workspaceFolder = getActiveWorkspaceFolder();
+          const workspaceUri = workspaceFolder?.uri.toString();
+
+          // 1. Handle workspace binding if requested
+          if (data.bindWorkspace && workspaceUri) {
+            await this.profileManager.bindWorkspace(savedProfile.id, workspaceUri);
+          }
+
+          // 2. Handle HTTPS to SSH conversion if requested
+          if (data.convertRemoteSsh && workspaceFolder) {
+            const cwd = workspaceFolder.uri.fsPath;
+            const gitConfig = new GitConfigManager();
+            const allProfiles = this.profileManager.getProfiles();
+            await gitConfig.checkAndSuggestSshRemote(cwd, savedProfile, allProfiles);
+          }
+
+          // 3. Auto-switch/apply if this is bound to workspace or is currently active
           const activeId = this.profileManager.getActiveProfileId(workspaceUri);
-          if (savedProfile.id === activeId) {
+          if (savedProfile.id === activeId || (data.bindWorkspace && workspaceUri)) {
             await this.onSwitchProfile(savedProfile);
           }
 
           await this.sendProfiles();
           this.panel?.webview.postMessage({
             type: 'saveSuccess',
-            payload: { message: data.id ? 'Profile updated & applied!' : 'Profile added!' },
+            payload: { message: data.id ? 'Profile updated & applied!' : 'Profile added & applied!' },
           });
         } catch (err) {
           this.panel?.webview.postMessage({
@@ -221,7 +240,8 @@ export class PanelProvider {
 
       case 'bindWorkspace': {
         const { id } = msg.payload as { id: string };
-        const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+        const workspaceFolder = getActiveWorkspaceFolder();
+        const workspaceUri = workspaceFolder?.uri.toString();
         if (!workspaceUri) {
           this.panel?.webview.postMessage({
             type: 'error',
@@ -332,7 +352,8 @@ export class PanelProvider {
             await this.sendProfiles();
             
             // If there's an active profile, re-apply it to the system just in case
-            const workspaceUri = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+            const workspaceFolder = getActiveWorkspaceFolder();
+            const workspaceUri = workspaceFolder?.uri.toString();
             const activeProfile = this.profileManager.getActiveProfile(workspaceUri);
             if (activeProfile) {
               await this.onSwitchProfile(activeProfile);
@@ -347,44 +368,24 @@ export class PanelProvider {
       }
 
       case 'convertToSsh': {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        const workspaceFolder = getActiveWorkspaceFolder();
         if (!workspaceFolder) {
           vscode.window.showWarningMessage('No workspace folder open.');
           break;
         }
 
         const cwd = workspaceFolder.uri.fsPath;
+        const workspaceUri = workspaceFolder.uri.toString();
+        const activeProfile = this.profileManager.getActiveProfile(workspaceUri);
+        if (!activeProfile) {
+          vscode.window.showWarningMessage('No active profile to convert remote for.');
+          break;
+        }
+
         const gitConfig = new GitConfigManager();
-        const remoteUrl = await gitConfig.getRemoteUrl(cwd);
-        if (!remoteUrl) {
-          vscode.window.showWarningMessage('No git remote found in this workspace.');
-          break;
-        }
-
-        const httpsMatch = remoteUrl.match(
-          /^https:\/\/github\.com\/([^\/]+)\/(.+?)(?:\.git)?$/
-        );
-        if (!httpsMatch) {
-          vscode.window.showInformationMessage(
-            `Remote is already SSH or not a GitHub HTTPS URL: ${remoteUrl}`
-          );
-          break;
-        }
-
-        const [, org, repo] = httpsMatch;
-        const sshUrl = `git@github.com:${org}/${repo}.git`;
-
-        try {
-          const { exec } = require('child_process') as typeof import('child_process');
-          const { promisify } = require('util') as typeof import('util');
-          const execAsync = promisify(exec);
-          await execAsync(`git -C "${cwd}" remote set-url origin "${sshUrl}"`);
-          
-          vscode.window.showInformationMessage(`✅ Remote converted to SSH: ${sshUrl}`);
-          await this.sendProfiles(); // Send updated workspace remote status back to webview
-        } catch (err: any) {
-          vscode.window.showErrorMessage(`Failed to convert remote: ${err.message}`);
-        }
+        const allProfiles = this.profileManager.getProfiles();
+        await gitConfig.checkAndSuggestSshRemote(cwd, activeProfile, allProfiles);
+        await this.sendProfiles();
         break;
       }
     }
@@ -787,6 +788,23 @@ export class PanelProvider {
         </div>
       </div>
 
+      <!-- Current Workspace Quick Actions -->
+      <div id="formWorkspaceActions" style="display:none; margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+        <p style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.8px; color:var(--text-muted); margin-bottom:10px;">Workspace Options (Current Folder)</p>
+        
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; cursor:pointer; color:var(--text);">
+            <input type="checkbox" id="fBindWorkspace" style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer;" checked />
+            Bind this workspace to this profile
+          </label>
+          
+          <label id="fConvertRemoteSshContainer" style="display:none; align-items:center; gap:8px; font-size:13px; font-weight:500; cursor:pointer; color:var(--yellow);">
+            <input type="checkbox" id="fConvertRemoteSsh" style="width:16px; height:16px; accent-color:var(--yellow); cursor:pointer;" checked />
+            ⚡ Convert current workspace remote to SSH (Recommended)
+          </label>
+        </div>
+      </div>
+
       <div class="form-actions">
         <button class="btn btn-ghost" onclick="closeForm()">Cancel</button>
         <button class="btn btn-primary" onclick="saveProfile()" id="saveBtn">Save Profile</button>
@@ -1078,6 +1096,36 @@ export class PanelProvider {
     function openForm(editId) {
       document.getElementById('editId').value = editId || '';
       document.getElementById('formTitle').textContent = editId ? 'Edit Profile' : 'Add GitHub Profile';
+      document.getElementById('genSshResult').style.display = 'none';
+
+      // Setup workspace quick actions block
+      const wsActionsDiv = document.getElementById('formWorkspaceActions');
+      const convertContainer = document.getElementById('fConvertRemoteSshContainer');
+      const bindCheckbox = document.getElementById('fBindWorkspace');
+      const convertCheckbox = document.getElementById('fConvertRemoteSsh');
+
+      if (workspaceInfo) {
+        wsActionsDiv.style.display = 'block';
+        
+        // Setup Bind checkbox default state
+        if (!editId) {
+          bindCheckbox.checked = true; // checked by default for new profile
+        } else {
+          const p = profiles.find(x => x.id === editId);
+          bindCheckbox.checked = p && p.boundWorkspaces && p.boundWorkspaces.includes(workspaceInfo.uri);
+        }
+
+        // Setup Convert HTTPS to SSH checkbox
+        if (workspaceInfo.remoteType === 'https') {
+          convertContainer.style.display = 'flex';
+          convertCheckbox.checked = true; // recommended and checked by default
+        } else {
+          convertContainer.style.display = 'none';
+          convertCheckbox.checked = false;
+        }
+      } else {
+        wsActionsDiv.style.display = 'none';
+      }
 
       if (editId) {
         const p = profiles.find(x => x.id === editId);
@@ -1124,6 +1172,9 @@ export class PanelProvider {
       const sshKeyPath = document.getElementById('fSshKeyPath').value.trim();
       const token = document.getElementById('fToken').value.trim();
 
+      const bindWorkspace = document.getElementById('fBindWorkspace').checked;
+      const convertRemoteSsh = document.getElementById('fConvertRemoteSsh').checked;
+
       if (!label || !gitName || !gitEmail || !githubUsername) {
         showToast('Please fill in all required fields.', 'error');
         return;
@@ -1136,7 +1187,8 @@ export class PanelProvider {
       vscode.postMessage({
         type: 'saveProfile',
         payload: { id: id || undefined, label, gitName, gitEmail, githubUsername,
-                   sshKeyPath: sshKeyPath || undefined, token: token || undefined }
+                   sshKeyPath: sshKeyPath || undefined, token: token || undefined,
+                   bindWorkspace, convertRemoteSsh }
       });
 
       setTimeout(() => { btn.disabled = false; btn.textContent = 'Save Profile'; }, 2000);
