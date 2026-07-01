@@ -3,12 +3,22 @@
   "displayName": "GitHub Profile Switcher",
   "description": "Easily switch between multiple GitHub profiles (user.name, user.email, SSH key, token) per workspace.",
   "version": "1.9.5",
-  "publisher": "latief",
+  "publisher": "LatiefAhmad",
+  "license": "MIT",
+  "homepage": "https://github.com/latiefahmad/github-switcher#readme",
+  "bugs": {
+    "url": "https://github.com/latiefahmad/github-switcher/issues"
+  },
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.74.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "SCM Providers"
   ],
   "keywords": [
     "github",
